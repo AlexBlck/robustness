@@ -102,16 +102,19 @@ def plasma_fractal(mapsize=256, wibbledecay=3):
 
 
 def clipped_zoom(img, zoom_factor):
-    h = img.shape[0]
+    h, w = img.shape[:2]
     # ceil crop height(= crop width)
     ch = int(np.ceil(h / float(zoom_factor)))
+    cw = int(np.ceil(w / float(zoom_factor)))
 
     top = (h - ch) // 2
-    img = scizoom(img[top:top + ch, top:top + ch], (zoom_factor, zoom_factor, 1), order=1)
+    right = (w - cw) // 2
+    img = scizoom(img[top:top + ch, right:right + cw], (zoom_factor, zoom_factor, 1), order=1)
     # trim off any extra pixels
     trim_top = (img.shape[0] - h) // 2
+    trim_right = (img.shape[1] - w) // 2
 
-    return img[trim_top:trim_top + h, trim_top:trim_top + h]
+    return img[trim_top:trim_top + h, trim_right:trim_right + w]
 
 
 # /////////////// End Corruption Helpers ///////////////
@@ -167,6 +170,7 @@ def gaussian_blur(x, severity=1):
 
 
 def glass_blur(x, severity=1):
+    W, H = x.size
     # sigma, max_delta, iterations
     c = [(0.7, 1, 2), (0.9, 2, 1), (1, 2, 3), (1.1, 3, 2), (1.5, 4, 2)][severity - 1]
 
@@ -174,8 +178,8 @@ def glass_blur(x, severity=1):
 
     # locally shuffle pixels
     for i in range(c[2]):
-        for h in range(224 - c[1], c[1], -1):
-            for w in range(224 - c[1], c[1], -1):
+        for h in range(H - c[1], c[1], -1):
+            for w in range(W - c[1], c[1], -1):
                 dx, dy = np.random.randint(-c[1], c[1], size=(2,))
                 h_prime, w_prime = h + dy, w + dx
                 # swap
@@ -210,13 +214,14 @@ def motion_blur(x, severity=1):
     x = cv2.imdecode(np.fromstring(x.make_blob(), np.uint8),
                      cv2.IMREAD_UNCHANGED)
 
-    if x.shape != (224, 224):
+    if len(x.shape) != 2:
         return np.clip(x[..., [2, 1, 0]], 0, 255)  # BGR to RGB
     else:  # greyscale to RGB
         return np.clip(np.array([x, x, x]).transpose((1, 2, 0)), 0, 255)
 
 
 def zoom_blur(x, severity=1):
+    w, h = x.size
     c = [np.arange(1, 1.11, 0.01),
          np.arange(1, 1.16, 0.01),
          np.arange(1, 1.21, 0.02),
@@ -233,15 +238,19 @@ def zoom_blur(x, severity=1):
 
 
 def fog(x, severity=1):
+    w, h = x.size
     c = [(1.5, 2), (2., 2), (2.5, 1.7), (2.5, 1.5), (3., 1.4)][severity - 1]
 
     x = np.array(x) / 255.
     max_val = x.max()
-    x += c[0] * plasma_fractal(wibbledecay=c[1])[:224, :224][..., np.newaxis]
+    mapsize = int(2 ** np.ceil(np.log2(max([w,h]))))
+    x += c[0] * plasma_fractal(wibbledecay=c[1], mapsize=mapsize)[:h, :w][..., np.newaxis]
     return np.clip(x * max_val / (max_val + c[0]), 0, 1) * 255
 
 
 def frost(x, severity=1):
+    w, h = x.size
+    side = min(x.size)
     c = [(1, 0.4),
          (0.8, 0.6),
          (0.7, 0.7),
@@ -255,14 +264,16 @@ def frost(x, severity=1):
                 resource_filename(__name__, 'frost/frost5.jpg'),
                 resource_filename(__name__, 'frost/frost6.jpg')][idx]
     frost = cv2.imread(filename)
+    frost = cv2.resize(frost, smaller_size(frost.shape[:2], side * 2))
     # randomly crop and convert to rgb
-    x_start, y_start = np.random.randint(0, frost.shape[0] - 224), np.random.randint(0, frost.shape[1] - 224)
-    frost = frost[x_start:x_start + 224, y_start:y_start + 224][..., [2, 1, 0]]
+    x_start, y_start = np.random.randint(0, frost.shape[0] - h), np.random.randint(0, frost.shape[1] - w)
+    frost = frost[x_start:x_start + h, y_start:y_start + w][..., [2, 1, 0]]
 
     return np.clip(c[0] * np.array(x) + c[1] * frost, 0, 255)
 
 
 def snow(x, severity=1):
+    w, h = x.size
     c = [(0.1, 0.3, 3, 0.5, 10, 4, 0.8),
          (0.2, 0.3, 2, 0.5, 12, 4, 0.7),
          (0.55, 0.3, 4, 0.9, 12, 8, 0.7),
@@ -286,8 +297,9 @@ def snow(x, severity=1):
                               cv2.IMREAD_UNCHANGED) / 255.
     snow_layer = snow_layer[..., np.newaxis]
 
-    x = c[6] * x + (1 - c[6]) * np.maximum(x, cv2.cvtColor(x, cv2.COLOR_RGB2GRAY).reshape(224, 224, 1) * 1.5 + 0.5)
-    return np.clip(x + snow_layer + np.rot90(snow_layer, k=2), 0, 1) * 255
+    x = c[6] * x + (1 - c[6]) * np.maximum(x, cv2.cvtColor(x, cv2.COLOR_RGB2GRAY).reshape(h, w, 1) * 1.5 + 0.5)
+
+    return np.clip(x + snow_layer[:h,:w,:] + np.rot90(snow_layer[:h,:w,:], k=2), 0, 1) * 255
 
 
 def spatter(x, severity=1):
@@ -383,21 +395,23 @@ def jpeg_compression(x, severity=1):
 
 
 def pixelate(x, severity=1):
+    w, h = x.size
     c = [0.6, 0.5, 0.4, 0.3, 0.25][severity - 1]
 
-    x = x.resize((int(224 * c), int(224 * c)), PILImage.BOX)
-    x = x.resize((224, 224), PILImage.BOX)
+    x = x.resize((int(w * c), int(h * c)), PILImage.BOX)
+    x = x.resize((w, h), PILImage.BOX)
 
     return x
 
 
 # mod of https://gist.github.com/erniejunior/601cdf56d2b424757de5
 def elastic_transform(image, severity=1):
-    c = [(244 * 2, 244 * 0.7, 244 * 0.1),   # 244 should have been 224, but ultimately nothing is incorrect
-         (244 * 2, 244 * 0.08, 244 * 0.2),
-         (244 * 0.05, 244 * 0.01, 244 * 0.02),
-         (244 * 0.07, 244 * 0.01, 244 * 0.02),
-         (244 * 0.12, 244 * 0.01, 244 * 0.02)][severity - 1]
+    s = min(image.size)
+    c = [(s * 2, s * 0.7, s * 0.1),   # 244 should have been 224, but ultimately nothing is incorrect
+         (s * 2, s * 0.08, s * 0.2),
+         (s * 0.05, s * 0.01, s * 0.02),
+         (s * 0.07, s * 0.01, s * 0.02),
+         (s * 0.12, s * 0.01, s * 0.02)][severity - 1]
 
     image = np.array(image, dtype=np.float32) / 255.
     shape = image.shape
