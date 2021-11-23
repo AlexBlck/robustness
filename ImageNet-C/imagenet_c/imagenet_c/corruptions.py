@@ -22,6 +22,19 @@ from pkg_resources import resource_filename
 
 warnings.simplefilter("ignore", UserWarning)
 
+def smaller_size(size, target):
+    w, h = size
+
+    if w < h:
+        f = w / target
+    else:
+        f = h / target
+
+    new_w = int(w // f)
+    new_h = int(h // f)
+
+    return (new_w, new_h)
+
 
 def disk(radius, alias_blur=0.1, dtype=np.float32):
     if radius <= 8:
