@@ -137,14 +137,14 @@ def clipped_zoom(img, zoom_factor):
 
 def gaussian_noise(x, severity=1):
     c = [.08, .12, 0.18, 0.26, 0.38][severity - 1]
-
+    c /= 2
     x = np.array(x) / 255.
     return np.clip(x + np.random.normal(size=x.shape, scale=c), 0, 1) * 255
 
 
 def shot_noise(x, severity=1):
     c = [60, 25, 12, 5, 3][severity - 1]
-
+    c /= 2
     x = np.array(x) / 255.
     return np.clip(np.random.poisson(x * c) / float(c), 0, 1) * 255
 
@@ -178,6 +178,8 @@ def fgsm(x, source_net, severity=1):
 def gaussian_blur(x, severity=1):
     c = [1, 2, 3, 4, 6][severity - 1]
 
+    c *= 4.65
+
     x = gaussian(np.array(x) / 255., sigma=c, multichannel=True)
     return np.clip(x, 0, 1) * 255
 
@@ -202,10 +204,11 @@ def glass_blur(x, severity=1):
 
 
 def defocus_blur(x, severity=1):
+    factor = 4.65
     c = [(3, 0.1), (4, 0.5), (6, 0.5), (8, 0.5), (10, 0.5)][severity - 1]
 
     x = np.array(x) / 255.
-    kernel = disk(radius=c[0], alias_blur=c[1])
+    kernel = disk(radius=c[0] * factor, alias_blur=c[1] * factor)
 
     channels = []
     for d in range(3):
@@ -216,18 +219,19 @@ def defocus_blur(x, severity=1):
 
 
 def motion_blur(x, severity=1):
+    factor = 4.65
     c = [(10, 3), (15, 5), (15, 8), (15, 12), (20, 15)][severity - 1]
 
     output = BytesIO()
     x.save(output, format='PNG')
     x = MotionImage(blob=output.getvalue())
 
-    x.motion_blur(radius=c[0], sigma=c[1], angle=np.random.uniform(-45, 45))
+    x.motion_blur(radius=c[0] * factor, sigma=c[1] * factor, angle=np.random.uniform(-45, 45))
 
     x = cv2.imdecode(np.fromstring(x.make_blob(), np.uint8),
                      cv2.IMREAD_UNCHANGED)
 
-    if len(x.shape) != 2:
+    if x.shape != (1024, 1024):
         return np.clip(x[..., [2, 1, 0]], 0, 255)  # BGR to RGB
     else:  # greyscale to RGB
         return np.clip(np.array([x, x, x]).transpose((1, 2, 0)), 0, 255)
@@ -253,12 +257,12 @@ def zoom_blur(x, severity=1):
 def fog(x, severity=1):
     w, h = x.size
     c = [(1.5, 2), (2., 2), (2.5, 1.7), (2.5, 1.5), (3., 1.4)][severity - 1]
-
+    factor1 = 0.5
     x = np.array(x) / 255.
     max_val = x.max()
-    mapsize = int(2 ** np.ceil(np.log2(max([w,h]))))
-    x += c[0] * plasma_fractal(wibbledecay=c[1], mapsize=mapsize)[:h, :w][..., np.newaxis]
-    return np.clip(x * max_val / (max_val + c[0]), 0, 1) * 255
+    mapsize = int(2 ** np.ceil(np.log2(max([w, h]))))
+    x += (c[0] * factor1) * plasma_fractal(wibbledecay=c[1] * 0.5, mapsize=mapsize)[:h, :w][..., np.newaxis]
+    return np.clip(x * max_val / (max_val + c[0] * factor1), 0, 1) * 255
 
 
 def frost(x, severity=1):
@@ -410,6 +414,7 @@ def jpeg_compression(x, severity=1):
 def pixelate(x, severity=1):
     w, h = x.size
     c = [0.6, 0.5, 0.4, 0.3, 0.25][severity - 1]
+    c *= 0.25
 
     x = x.resize((int(w * c), int(h * c)), PILImage.BOX)
     x = x.resize((w, h), PILImage.BOX)
